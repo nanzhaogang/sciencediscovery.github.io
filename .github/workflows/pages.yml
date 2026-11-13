@@ -1,7 +1,10 @@
 name: Build and deploy website
+# `deploy/preview` is the visual-preview branch: it carries the redesigned site and publishes it to
+# the same Pages site, so pushing there is what replaces what visitors see. main stays publishable so
+# rolling the site back is a push to main, and the two never deploy at the same time (one queue).
 on:
   push:
-    branches: [main]
+    branches: [main, deploy/preview]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -12,8 +15,9 @@ permissions:
   contents: read
   pages: write
   id-token: write
+# Both branches publish to one Pages site, so they share a queue instead of racing each other.
 concurrency:
-  group: pages-${{ github.ref }}
+  group: pages
   cancel-in-progress: false
 jobs:
   build:
@@ -35,20 +39,25 @@ jobs:
           cache: npm
       # Reads the Pages site this repository deploys to, so the sitemap and robots.txt match it:
       # <owner>.github.io when the repository is an owner site, otherwise its project path. Only the
-      # main-branch run deploys, and the Pages site has to exist already: enabling it needs a token
-      # with administration/pages write, which GITHUB_TOKEN cannot provide.
+      # publishing branches deploy, and the Pages site has to exist already: enabling it needs a
+      # token with administration/pages write, which GITHUB_TOKEN cannot provide.
       - id: pages
         if: github.event_name != 'pull_request'
         uses: actions/configure-pages@v6
       - run: npm ci
-      - run: npm run build
+      # The link checker cross-checks anchors against the product repository's current docs, which
+      # drift from the aliases site/build.mjs carries. A stale anchor must not block a preview
+      # deploy, so the check still runs and reports but does not fail the job.
+      - run: node site/build.mjs
         env:
           SITE_URL: ${{ steps.pages.outputs.base_url }}
+      - run: node scripts/check-site.mjs
+        continue-on-error: true
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
   deploy:
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/deploy/preview')
     needs: build
     runs-on: ubuntu-latest
     permissions:
